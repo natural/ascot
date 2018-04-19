@@ -2,7 +2,7 @@
   (:require [natural.ascot.core]))
 
 
-(seq
+#_(seq
  (map (fn [[a b c]] (intern a b c))
       [['natural.ascot 'column-specs natural.ascot.core/column-specs]
        ['natural.ascot 'register     natural.ascot.core/register]

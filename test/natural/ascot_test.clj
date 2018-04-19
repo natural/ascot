@@ -1,41 +1,82 @@
 (ns natural.ascot-test
-  (:use midje.sweet) 
-  (:require [natural.ascot.core :as ascot]))
+  (:import [java.sql Types])
+  (:use midje.sweet)
+  (:require [clojure.java.jdbc  :as jdbc]
+            [clojure.spec.alpha :as s]
+            [natural.ascot.core :as ascot]
+            [natural.ascot.json-schema :as ascot-json]
+            ))
 
 
-(fact "about some partial equality fns"
-      (ascot/date= "date")   => true
-      (ascot/date= "int")    => false
-
-      (ascot/int= "int")      => true
-      (ascot/int= "integer")  => true
-      (ascot/int= "int4")     => true
-      (ascot/int= "int8")     => true
-      (ascot/int= "date")     => false
-      (ascot/int= "int2")     => false
-
-      (ascot/serial= "serial") => true
-      (ascot/serial= "nope")   => false
-
-      (ascot/timestamp= "timestamptz") => true
-      (ascot/timestamp= "timestamp")   => true
-      (ascot/timestamp= "datetime")    => false
-      )
+(fact
+ "specs account for null columns"
+ (let [col (ascot/col->spec {:data_type Types/INTEGER :nullable 1})]
+   (s/valid? col 0)   => true
+   (s/valid? col 1)   => true
+   (s/valid? col nil) => true))
 
 
-(fact "about common column properties"
-      (let [type-name "any"
-            default-value "default"
-            ordinal-pos 37]
+(fact
+ "specs account for non-null columns"
+ (let [col (ascot/col->spec {:data_type Types/INTEGER :nullable 0})]
+   (nil? (:spec col)) => false
+   (nil? (:type col)) => false
+   (s/valid? col 0)   => true
+   (s/valid? col 1)   => true
+   (s/valid? col nil) => false))
 
-        (-> (ascot/common-props {:column_def default-value} {} {})     :json-schema/default)            => (read-string default-value)
-        (-> (ascot/common-props {:ordinal_position ordinal-pos} {} {}) :json-schema/x-ordinal-position) => ordinal-pos
-        (-> (ascot/common-props {:nullable 1} {} {})                   :json-schema/x-nullable)         => true
-        (-> (ascot/common-props {:type_name type-name} {} {})          :json-schema/x-type-name )       => type-name))
+
+(fact
+ "specs allow for varchar columns"
+ (let [col (ascot/col->spec {:data_type Types/VARCHAR :nullable 0})]
+   (s/valid? col 0)   => false
+   (s/valid? col "")  => true
+   (s/valid? col "1") => true))
 
 
-(fact "about column default extract"
-      (ascot/extract-string-default "\"ok\"::nope")  =>     "ok"
-      (ascot/extract-string-default "\"nope\"::yep") =not=> "ok"
-      (ascot/extract-string-default "ok::nope")      =not=> "ok"
-      )
+(fact
+ "specs allow for char columns"
+ (let [col (ascot/col->spec {:data_type Types/CHAR :nullable 0})]
+   (s/valid? col 0)   => false
+   (s/valid? col "")  => true
+   (s/valid? col "1") => true))
+
+
+(fact
+  "specs allow for int columns"
+  (let [col (ascot/col->spec {:data_type Types/INTEGER :nullable 0})]
+    (s/valid? col -1)  => true
+    (s/valid? col  0)  => true
+    (s/valid? col -1)  => true        
+    (s/valid? col "0") => false
+    (s/valid? col "1") => false
+    (s/valid? col nil) => false))
+
+
+;; sqlite ":memory:" db type doesn't work with jdbc meta data methods.  :(
+;;
+(let [temp-db (java.io.File/createTempFile "ascot-test" ".db")
+      temp-name (.getAbsolutePath temp-db)
+      source {:dbtype "sqlite" :dbname temp-name}
+      
+      _ (jdbc/execute! source "CREATE TABLE T (a INT PRIMARY KEY, b INT)")
+      _ (jdbc/execute! source "CREATE TABLE U (c INT REFERENCES T (b))")
+      
+      rels (ascot/relations source)]
+  (fact
+    "relations found via metadata method calls"
+    (count (-> rels :relations))              => 2
+    (count (-> rels :foreign-keys (get "T"))) => 0
+    (count (-> rels :primary-keys (get "T"))) => 1
+    (count (-> rels :columns      (get "T"))) => 2
+    (count (-> rels :foreign-keys (get "U"))) => 1
+
+    (.delete temp-db) => true))
+
+
+(fact "about json schema bits"
+  (ascot-json/date? "date") => true
+  ;; json: default, position, null, type
+  ;; 
+  )
+
